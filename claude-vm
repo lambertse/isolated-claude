@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+# claude-vm — launch Claude Code inside a per-project Docker container.
+#
+# Design:
+#   - One container per project directory (name derived from path hash).
+#   - A shared Docker named volume `claude-vm-auth` holds ~/.claude so you log in once.
+#   - Only the current dir is bind-mounted. No other host paths leak in.
+#   - `claude-vm`              -> start/reuse container, exec a fresh `claude` session
+#   - `claude-vm login`        -> one-time OAuth login (forwards callback port)
+#   - `claude-vm shell`        -> drop into a bash shell inside the container
+#   - `claude-vm stop`         -> stop this project's container
+#   - `claude-vm rm`           -> stop + remove this project's container
+#   - `claude-vm ps`           -> list all claude-vm containers
+#   - `claude-vm rebuild`      -> rebuild the image
+#
+# Each invocation spawns a NEW `claude` process, so using this as a tmux keybind
+# gives you independent Claude sessions per pane while sharing the project container.
+
+set -euo pipefail
+
+IMAGE_NAME="${CLAUDE_VM_IMAGE:-claude-vm:latest}"
+AUTH_VOLUME="${CLAUDE_VM_AUTH_VOLUME:-claude-vm-auth}"
+# Second volume for ~/.claude.json (the config file, NOT the directory).
+# Claude Code stores account/onboarding state there; without it, you're prompted to log in
+# again even with a valid token in .credentials.json.
+CONFIG_VOLUME="${CLAUDE_VM_CONFIG_VOLUME:-claude-vm-config}"
+# OAuth callback port used by Claude Code. Override if Anthropic changes it.
+OAUTH_PORT="${CLAUDE_VM_OAUTH_PORT:-54545}"
+
+# Resolve the directory where this script + Dockerfile live (for `rebuild`).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+die() { echo "claude-vm: $*" >&2; exit 1; }
+
+need_docker() {
+  command -v docker >/dev/null 2>&1 || die "docker not found in PATH"
+  docker info >/dev/null 2>&1 || die "docker daemon not reachable (is Docker Desktop / Colima running?)"
+}
+
+# Stable short name for the current working directory.
+project_container_name() {
+  local pwd_abs
+  pwd_abs="$(pwd -P)"
+  # 12-char hash keeps names short and collision-free in practice.
+  local hash
+  hash="$(printf '%s' "$pwd_abs" | shasum -a 256 | cut -c1-12)"
+  echo "claude-vm-${hash}"
+}
+
+image_exists() {
+  docker image inspect "$IMAGE_NAME" >/dev/null 2>&1
+}
+
+ensure_image() {
+  if ! image_exists; then
+    echo "claude-vm: image '$IMAGE_NAME' not found, building from $SCRIPT_DIR ..." >&2
+    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+  fi
+}
+
+ensure_auth_volume() {
+  if ! docker volume inspect "$AUTH_VOLUME" >/dev/null 2>&1; then
+    docker volume create "$AUTH_VOLUME" >/dev/null
+    # Seed from host ~/.claude if it exists — lets you skip OAuth if already logged in on host.
+    if [[ -d "$HOME/.claude" ]]; then
+      echo "claude-vm: seeding auth volume from ~/.claude ..." >&2
+      docker run --rm \
+        --user 0:0 \
+        -v "$AUTH_VOLUME:/dst" \
+        -v "$HOME/.claude:/src:ro" \
+        --entrypoint sh \
+        "$IMAGE_NAME" -c 'cp -a /src/. /dst/ && chown -R 1000:1000 /dst' >/dev/null
+    fi
+  fi
+}
+
+ensure_config_volume() {
+  # Creates/initialises the volume that holds ~/.claude.json (the file).
+  # Strategy: the volume is mounted at /home/node/.claude-config in every container,
+  # and we symlink ~/.claude.json -> /home/node/.claude-config/claude.json on container start.
+  # If a backup exists in the auth volume (Claude Code writes one), restore from it.
+  if ! docker volume inspect "$CONFIG_VOLUME" >/dev/null 2>&1; then
+    docker volume create "$CONFIG_VOLUME" >/dev/null
+    echo "claude-vm: initialising config volume ..." >&2
+    docker run --rm \
+      --user 0:0 \
+      -v "$CONFIG_VOLUME:/cfg" \
+      -v "$AUTH_VOLUME:/auth:ro" \
+      --entrypoint sh \
+      "$IMAGE_NAME" -c '
+        chown 1000:1000 /cfg
+        # If a backup of .claude.json exists in the auth volume, restore newest one.
+        if [ -d /auth/backups ]; then
+          latest=$(ls -1t /auth/backups/.claude.json.backup.* 2>/dev/null | head -n1)
+          if [ -n "$latest" ]; then
+            cp "$latest" /cfg/claude.json
+            chown 1000:1000 /cfg/claude.json
+            echo "claude-vm: restored .claude.json from $latest" >&2
+          fi
+        fi
+        # Also seed from host ~/.claude.json if present.
+        if [ -f /host-home/.claude.json ]; then
+          cp /host-home/.claude.json /cfg/claude.json
+          chown 1000:1000 /cfg/claude.json
+          echo "claude-vm: seeded .claude.json from host" >&2
+        fi
+      ' >/dev/null || true
+    # Second pass: seed from host file if present (mounted separately to avoid failure if missing).
+    if [[ -f "$HOME/.claude.json" ]]; then
+      docker run --rm \
+        --user 0:0 \
+        -v "$CONFIG_VOLUME:/cfg" \
+        -v "$HOME/.claude.json:/src.json:ro" \
+        --entrypoint sh \
+        "$IMAGE_NAME" -c 'cp /src.json /cfg/claude.json && chown 1000:1000 /cfg/claude.json' >/dev/null
+    fi
+  fi
+}
+
+# Shell snippet that every container runs at start/exec to link ~/.claude.json
+# into the config volume. Safe to run repeatedly.
+link_config_cmd() {
+  cat <<'SH'
+if [ ! -L "$HOME/.claude.json" ]; then
+  # If a real file exists (first boot, no symlink yet), move it into the volume.
+  if [ -f "$HOME/.claude.json" ] && [ ! -f "$HOME/.claude-config/claude.json" ]; then
+    cp "$HOME/.claude.json" "$HOME/.claude-config/claude.json"
+  fi
+  rm -f "$HOME/.claude.json"
+  ln -s "$HOME/.claude-config/claude.json" "$HOME/.claude.json"
+fi
+# Ensure the target file exists (empty JSON is fine as a placeholder).
+[ -f "$HOME/.claude-config/claude.json" ] || echo '{}' > "$HOME/.claude-config/claude.json"
+SH
+}
+
+container_state() {
+  # Prints: "running", "exited", or "" if missing.
+  docker inspect -f '{{.State.Status}}' "$1" 2>/dev/null || true
+}
+
+ensure_container() {
+  local name="$1"
+  local state
+  state="$(container_state "$name")"
+
+  case "$state" in
+    running) : ;;  # already up
+    exited|created)
+      docker start "$name" >/dev/null
+      ;;
+    "")
+      docker run -d \
+        --name "$name" \
+        --label "claude-vm=1" \
+        --label "claude-vm-path=$(pwd -P)" \
+        -v "$(pwd -P):/workspace" \
+        -v "$AUTH_VOLUME:/home/node/.claude" \
+        -w /workspace \
+        "$IMAGE_NAME" >/dev/null
+      ;;
+    *)
+      die "container '$name' in unexpected state: $state"
+      ;;
+  esac
+}
+
+cmd_run() {
+  need_docker
+  ensure_image
+  ensure_auth_volume
+  local name
+  name="$(project_container_name)"
+  ensure_container "$name"
+  # -it for interactive TTY; each invocation is a fresh claude process.
+  # Forward any extra args to `claude` (e.g. `claude-vm --resume`).
+  exec docker exec -it "$name" claude "$@"
+}
+
+cmd_login() {
+  need_docker
+  ensure_image
+  ensure_auth_volume
+  echo "claude-vm: starting one-time login. Browser will open; approve, then return here." >&2
+  # Use a throwaway container with the OAuth port forwarded so the redirect reaches us.
+  # Auth volume is mounted so the resulting token persists for all future project containers.
+  docker run --rm -it \
+    -p "127.0.0.1:${OAUTH_PORT}:${OAUTH_PORT}" \
+    -v "$AUTH_VOLUME:/home/node/.claude" \
+    "$IMAGE_NAME" claude /login
+  echo "claude-vm: login complete. Credentials saved to volume '$AUTH_VOLUME'." >&2
+}
+
+cmd_shell() {
+  need_docker
+  ensure_image
+  ensure_auth_volume
+  local name
+  name="$(project_container_name)"
+  ensure_container "$name"
+  exec docker exec -it "$name" bash
+}
+
+cmd_stop() {
+  need_docker
+  local name
+  name="$(project_container_name)"
+  [[ -n "$(container_state "$name")" ]] || die "no container for this directory"
+  docker stop "$name" >/dev/null
+  echo "stopped $name"
+}
+
+cmd_rm() {
+  need_docker
+  local name
+  name="$(project_container_name)"
+  [[ -n "$(container_state "$name")" ]] || die "no container for this directory"
+  docker rm -f "$name" >/dev/null
+  echo "removed $name"
+}
+
+cmd_ps() {
+  need_docker
+  docker ps -a --filter "label=claude-vm=1" \
+    --format 'table {{.Names}}\t{{.Status}}\t{{.Label "claude-vm-path"}}'
+}
+
+cmd_rebuild() {
+  need_docker
+  docker build --no-cache -t "$IMAGE_NAME" "$SCRIPT_DIR"
+}
+
+cmd_help() {
+  cat <<EOF
+claude-vm — Claude Code in a per-project Docker container
+
+Usage:
+  claude-vm [claude-args...]   Start/reuse this dir's container, run Claude Code
+  claude-vm login              One-time OAuth login (port-forwards callback)
+  claude-vm shell              Bash shell inside this dir's container
+  claude-vm stop               Stop this dir's container
+  claude-vm rm                 Remove this dir's container
+  claude-vm ps                 List all claude-vm containers
+  claude-vm rebuild            Rebuild the Docker image (no cache)
+  claude-vm help               Show this help
+
+Env:
+  CLAUDE_VM_IMAGE         (default: claude-vm:latest)
+  CLAUDE_VM_AUTH_VOLUME   (default: claude-vm-auth)
+  CLAUDE_VM_OAUTH_PORT    (default: 54545)
+EOF
+}
+
+main() {
+  local sub="${1:-run}"
+  case "$sub" in
+    login|shell|stop|rm|ps|rebuild|help)
+      shift
+      "cmd_$sub" "$@"
+      ;;
+    -h|--help)
+      cmd_help
+      ;;
+    *)
+      # Treat everything else as args to `claude`.
+      cmd_run "$@"
+      ;;
+  esac
+}
+
+main "$@"
