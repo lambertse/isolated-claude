@@ -60,7 +60,11 @@ All unrecognised arguments are forwarded directly to `claude`, so any flag that 
 Replace your existing Claude keybind with `claude-vm` in `~/.tmux.conf`:
 
 ```tmux
-bind-key C-a split-window -h "claude-vm"
+bind -r y run-shell '\
+  SESSION="claude-$(echo #{pane_current_path} | md5sum | cut -c1-8)"; \
+  tmux has-session -t "$SESSION" 2>/dev/null || \
+  tmux new-session -d -s "$SESSION" -c "#{pane_current_path}" "claude-vm"; \
+  tmux display-popup -w80% -h80% -E -S "bg=#141210" "tmux attach-session -t $SESSION"'
 ```
 
 Multiple panes in the same project directory share one container but each get their own `claude` process.
