@@ -16,15 +16,19 @@ container while sharing login credentials across projects via a named Docker vol
 - `install.sh` — copies the three files above into `~/.local/share/ai-agent-vm/`,
   symlinks `ai-agent-vm` onto `PATH`, and builds the image. There is no build system,
   package manager, or test suite in this repo — everything is plain shell.
+- `uninstall.sh` — reverses `install.sh` and also removes all Docker state for this
+  tool (containers labelled `ai-agent-vm=1`, the image, the auth/config volumes).
+  Keep it in sync with anything `install.sh` or `ai-agent-vm` creates (new volumes,
+  env-var-configurable names, etc.) so a full uninstall/reinstall cycle stays clean.
 
 ## No build/test/lint tooling
 
 There are no automated tests, linters, or CI configs. When validating changes to
-`ai-agent-vm`, `entrypoint.sh`, or `install.sh`, exercise them manually, e.g.:
+`ai-agent-vm`, `entrypoint.sh`, `install.sh`, or `uninstall.sh`, exercise them manually, e.g.:
 
 ```bash
-bash -n ai-agent-vm entrypoint.sh install.sh   # syntax check
-shellcheck ai-agent-vm entrypoint.sh install.sh  # if shellcheck is available
+bash -n ai-agent-vm entrypoint.sh install.sh uninstall.sh   # syntax check
+shellcheck ai-agent-vm entrypoint.sh install.sh uninstall.sh  # if shellcheck is available
 docker build -t ai-agent-vm:latest .              # verify Dockerfile still builds
 ```
 
