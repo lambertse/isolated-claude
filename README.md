@@ -40,6 +40,14 @@ ai-agent-vm login
 
 This opens a browser for the Anthropic OAuth flow. Your token is saved to the `ai-agent-vm-auth` Docker volume — you never need to log in again, even across projects.
 
+### Uninstall
+
+```bash
+./uninstall.sh
+```
+
+Removes the launcher symlink, installed files, all `ai-agent-vm` containers, the Docker image, and the auth/config volumes (including saved credentials). Use this before re-running `./install.sh` to guarantee a completely fresh install with no cached image layers, containers, or credentials left over. Pass `-y`/`--yes` to skip the confirmation prompt.
+
 ## Usage
 
 ```bash
@@ -132,6 +140,12 @@ ai-agent-vm login
 ```
 
 **Nuke everything**
+
+```bash
+./uninstall.sh
+```
+
+Or manually:
 
 ```bash
 docker ps -aq --filter label=ai-agent-vm=1 | xargs -r docker rm -f

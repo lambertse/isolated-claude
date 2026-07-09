@@ -75,6 +75,15 @@ ensure_auth_volume() {
         -v "$HOME/.claude:/src:ro" \
         --entrypoint sh \
         "$IMAGE_NAME" -c 'cp -a /src/. /dst/ && chown -R 1000:1000 /dst' >/dev/null
+    else
+      # Nothing to seed, but the volume still needs to be owned by uid 1000 (the
+      # container's `node` user) or entrypoint.sh can't write into it — a fresh
+      # named volume defaults to root:root ownership.
+      docker run --rm \
+        --user 0:0 \
+        -v "$AUTH_VOLUME:/dst" \
+        --entrypoint sh \
+        "$IMAGE_NAME" -c 'chown -R 1000:1000 /dst' >/dev/null
     fi
   fi
 }
