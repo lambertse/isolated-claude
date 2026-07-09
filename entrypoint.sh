@@ -5,7 +5,7 @@
 set -e
 
 VOLUME_ROOT="$HOME/.claude"
-PERSISTED_CONFIG="$VOLUME_ROOT/_home_claude.json"
+PERSISTED_CONFIG="$VOLUME_ROOT/_home_agent.json"
 HOME_CONFIG="$HOME/.claude.json"
 
 # Ensure the volume mount actually exists (it should; launcher always mounts it).
@@ -20,7 +20,7 @@ if [ -d "$VOLUME_ROOT" ]; then
     fi
   fi
 
-  # If nothing persisted yet, try restoring from Claude's own backup dir.
+  # If nothing persisted yet, try restoring from the agent's own backup dir.
   if [ ! -e "$PERSISTED_CONFIG" ]; then
     latest_backup="$(ls -1t "$VOLUME_ROOT"/backups/.claude.json.backup.* 2>/dev/null | head -n1 || true)"
     if [ -n "$latest_backup" ] && [ -f "$latest_backup" ]; then
@@ -29,8 +29,8 @@ if [ -d "$VOLUME_ROOT" ]; then
   fi
 
   # Remove any stale symlink, then (re)create it pointing at the persisted file.
-  # If the persisted file still doesn't exist, create an empty JSON object so Claude
-  # Code treats it as a configured install rather than running onboarding.
+  # If the persisted file still doesn't exist, create an empty JSON object so the AI Agent
+  # CLI treats it as a configured install rather than running onboarding.
   if [ ! -e "$PERSISTED_CONFIG" ]; then
     printf '{}' > "$PERSISTED_CONFIG"
   fi
@@ -43,10 +43,10 @@ if [ -d "$VOLUME_ROOT" ]; then
   # We redirect them to container-local storage so they don't leak between
   # project containers via the shared auth volume.
   #
-  # Container-local storage lives at ~/.claude-local/ (inside the container's
+  # Container-local storage lives at ~/.ai-agent-local/ (inside the container's
   # own filesystem, NOT the volume). It survives for the container's lifetime
   # — which matches one-container-per-project semantics.
-  LOCAL_ROOT="$HOME/.claude-local"
+  LOCAL_ROOT="$HOME/.ai-agent-local"
   mkdir -p "$LOCAL_ROOT"
 
   for dir_name in projects sessions session-env shell-snapshots plans tasks file-history todos debug paste-cache; do
