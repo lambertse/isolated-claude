@@ -64,28 +64,35 @@ ensure_image() {
 }
 
 ensure_auth_volume() {
+  local just_created=0
   if ! docker volume inspect "$AUTH_VOLUME" >/dev/null 2>&1; then
     docker volume create "$AUTH_VOLUME" >/dev/null
-    # Seed from host ~/.claude if it exists — lets you skip OAuth if already logged in on host.
-    if [[ -d "$HOME/.claude" ]]; then
-      echo "ai-agent-vm: seeding auth volume from ~/.claude ..." >&2
-      docker run --rm \
-        --user 0:0 \
-        -v "$AUTH_VOLUME:/dst" \
-        -v "$HOME/.claude:/src:ro" \
-        --entrypoint sh \
-        "$IMAGE_NAME" -c 'cp -a /src/. /dst/ && chown -R 1000:1000 /dst' >/dev/null
-    else
-      # Nothing to seed, but the volume still needs to be owned by uid 1000 (the
-      # container's `node` user) or entrypoint.sh can't write into it — a fresh
-      # named volume defaults to root:root ownership.
-      docker run --rm \
-        --user 0:0 \
-        -v "$AUTH_VOLUME:/dst" \
-        --entrypoint sh \
-        "$IMAGE_NAME" -c 'chown -R 1000:1000 /dst' >/dev/null
-    fi
+    just_created=1
   fi
+
+  # Seed from host ~/.claude on first creation only — lets you skip OAuth if
+  # already logged in on host. Never re-seed an existing volume (would clobber
+  # container-only state like session isolation symlinks).
+  if [[ "$just_created" -eq 1 ]] && [[ -d "$HOME/.claude" ]]; then
+    echo "ai-agent-vm: seeding auth volume from ~/.claude ..." >&2
+    docker run --rm \
+      --user 0:0 \
+      -v "$AUTH_VOLUME:/dst" \
+      -v "$HOME/.claude:/src:ro" \
+      --entrypoint sh \
+      "$IMAGE_NAME" -c 'cp -a /src/. /dst/' >/dev/null
+  fi
+
+  # Always (re)assert ownership, not just on first creation. A fresh named
+  # volume defaults to root:root, and a volume from a prior buggy run (or
+  # created/touched by any other root-run container) can drift back to
+  # root-owned — entrypoint.sh runs as uid 1000 (`node`) and needs write
+  # access every time. This is idempotent and cheap, so just always run it.
+  docker run --rm \
+    --user 0:0 \
+    -v "$AUTH_VOLUME:/dst" \
+    --entrypoint sh \
+    "$IMAGE_NAME" -c 'chown -R 1000:1000 /dst' >/dev/null
 }
 
 ensure_config_volume() {
