@@ -11,6 +11,8 @@
 #   - `ai-agent-vm stop`         -> stop this project's container
 #   - `ai-agent-vm rm`           -> stop + remove this project's container
 #   - `ai-agent-vm ps`           -> list all ai-agent-vm containers
+#   - `ai-agent-vm upgrade [v]`  -> update the CLI inside the container in place
+#   - `ai-agent-vm commit`       -> snapshot the container back into the image
 #   - `ai-agent-vm rebuild`      -> rebuild the image
 #
 # Each invocation spawns a NEW agent process, so using this as a tmux keybind
@@ -21,6 +23,11 @@ set -euo pipefail
 # Name of the CLI binary installed in the image (see Dockerfile). Kept in one
 # place since it's the one unavoidable reference to the upstream package name.
 AGENT_BIN="${AI_AGENT_VM_BIN:-claude}"
+
+# npm package that provides the CLI. Used by `upgrade` to reinstall inside a
+# running container. NOTE: the Dockerfile hardcodes this same name at build
+# time, so this var is not a single source of truth — keep the two in sync.
+AGENT_PKG="${AI_AGENT_VM_PKG:-@anthropic-ai/claude-code}"
 
 IMAGE_NAME="${AI_AGENT_VM_IMAGE:-ai-agent-vm:latest}"
 AUTH_VOLUME="${AI_AGENT_VM_AUTH_VOLUME:-ai-agent-vm-auth}"
@@ -251,6 +258,61 @@ cmd_rebuild() {
   docker build --no-cache -t "$IMAGE_NAME" "$SCRIPT_DIR"
 }
 
+cmd_upgrade() {
+  need_docker
+  ensure_image
+  ensure_auth_volume
+  local name version
+  name="$(project_container_name)"
+  # Optional version arg (default: latest). Lets you pin, e.g. `upgrade 2.1.230`.
+  version="${1:-latest}"
+  ensure_container "$name"
+
+  # The CLI is installed globally as root in the image, so its own auto-updater
+  # (which runs as the `node` user) can't write to /usr/local/lib/node_modules
+  # and silently no-ops — that's why the version drifts. We reinstall as root.
+  echo "ai-agent-vm: current version in $name:" >&2
+  docker exec -u root "$name" "$AGENT_BIN" --version >&2 || true
+
+  echo "ai-agent-vm: installing ${AGENT_PKG}@${version} inside $name ..." >&2
+  docker exec -u root "$name" npm install -g "${AGENT_PKG}@${version}"
+
+  echo "ai-agent-vm: new version in $name:" >&2
+  docker exec -u root "$name" "$AGENT_BIN" --version >&2
+
+  cat >&2 <<EOF
+
+ai-agent-vm: NOTE — this upgraded ONLY this project's container ($name).
+  * It survives 'stop'/'start' but is lost on 'ai-agent-vm rm' and is NOT
+    present in any freshly created container.
+  * Other project containers still run the image's baked-in version.
+  To make a new version the default everywhere, snapshot it with
+  'ai-agent-vm commit', or (durably) bump the image via 'ai-agent-vm rebuild'.
+EOF
+}
+
+cmd_commit() {
+  need_docker
+  local name
+  name="$(project_container_name)"
+  [[ -n "$(container_state "$name")" ]] || die "no container for this directory"
+  echo "ai-agent-vm: committing $name -> image '$IMAGE_NAME' ..." >&2
+  # docker commit excludes the bind-mounted /workspace and the named volumes,
+  # so it captures packages you apt/npm-installed in the container layer — the
+  # answer to "update the image without a from-scratch rebuild".
+  docker commit "$name" "$IMAGE_NAME" >/dev/null
+  cat >&2 <<EOF
+ai-agent-vm: image '$IMAGE_NAME' now reflects the current state of $name.
+  Future containers will include deps you installed inside it.
+  CAVEATS:
+  * The image now DIVERGES from the Dockerfile — a later 'ai-agent-vm rebuild'
+    rebuilds from source and drops these deps again. The durable fix is to add
+    them to the Dockerfile so they survive rebuilds.
+  * The commit also bakes in this container's local session state
+    (~/.ai-agent-local: history, sessions, todos), so new containers inherit it.
+EOF
+}
+
 cmd_help() {
   cat <<EOF
 ai-agent-vm — AI Agent CLI in a per-project Docker container
@@ -262,11 +324,20 @@ Usage:
   ai-agent-vm stop               Stop this dir's container
   ai-agent-vm rm                 Remove this dir's container
   ai-agent-vm ps                 List all ai-agent-vm containers
-  ai-agent-vm rebuild            Rebuild the Docker image (no cache)
+  ai-agent-vm upgrade [ver]      Update the CLI inside this dir's container
+                                 (alias: update; default: latest, e.g.
+                                 'upgrade 2.1.230'). Runs as root so it beats
+                                 the root-owned-folder wall the CLI's own
+                                 updater hits. In-place, keeps deps; lost on 'rm'.
+  ai-agent-vm commit             Snapshot this dir's container into the image
+                                 (preserves manually-installed deps; no rebuild)
+  ai-agent-vm rebuild            Rebuild the Docker image from the Dockerfile
+                                 (no cache; drops container-only deps)
   ai-agent-vm help               Show this help
 
 Env:
   AI_AGENT_VM_IMAGE         (default: ai-agent-vm:latest)
+  AI_AGENT_VM_PKG           (default: @anthropic-ai/claude-code)
   AI_AGENT_VM_AUTH_VOLUME   (default: ai-agent-vm-auth)
   AI_AGENT_VM_OAUTH_PORT    (default: 54545)
 EOF
@@ -275,9 +346,16 @@ EOF
 main() {
   local sub="${1:-run}"
   case "$sub" in
-    login|shell|stop|rm|ps|rebuild|help)
+    login|shell|stop|rm|ps|rebuild|commit|help)
       shift
       "cmd_$sub" "$@"
+      ;;
+    upgrade|update)
+      # 'update' is an alias — without it, the bare word falls through to the
+      # agent binary and runs the CLI's own `claude update`, which can't write
+      # the root-owned global install and fails. Route both to our root-based path.
+      shift
+      cmd_upgrade "$@"
       ;;
     -h|--help)
       cmd_help
