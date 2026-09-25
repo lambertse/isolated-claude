@@ -77,6 +77,37 @@ bind -r y run-shell '\
 
 Multiple panes in the same project directory share one container but each get their own agent process.
 
+## What's in the image
+
+Base: `node:22-slim` (Debian 12 bookworm) + the agent CLI, plus:
+
+| Area | Packages |
+|---|---|
+| C/C++ | `build-essential` (GCC 12, `make`), `gdb`, `valgrind`, `ninja-build`, `pkg-config`, `ccache` |
+| Testing / benchmarks | GoogleTest + GoogleMock 1.12 (`find_package(GTest)`), Google Benchmark 1.7 (`find_package(benchmark)`) |
+| Build / VCS | CMake 3.25, `git` (+ `less`) |
+| Python | Python 3.11 (`python` → `python3`), `pip`, `venv`, `pytest` |
+
+Notes:
+
+- **git** is for local operations (status, diff, commit, bisect…). There are no SSH keys or git credentials in the container, by design, so push/pull from the host. All paths are marked `safe.directory`, so host/container uid mismatches don't trip git's ownership check. `~/.gitconfig` doesn't persist across containers, so set your identity per repo instead: `git config user.name …` / `git config user.email …` (stored in `.git/config` on the mount).
+- **pip**: `PIP_BREAK_SYSTEM_PACKAGES=1` is set, so a bare `pip install foo` works (it lands in the container-local `~/.local` and is lost on `ai-agent-vm rm`). For real projects prefer a venv: `python -m venv .venv && . .venv/bin/activate`.
+- **Adding more**: append packages to the dev-toolchain `RUN apt-get install` line in the `Dockerfile`, then re-run `./install.sh` (see [Updating the image](#updating-the-image)).
+
+### Updating the image
+
+`ai-agent-vm rebuild` never builds from this repo checkout, so edits here won't reach the image through it. After changing the `Dockerfile`:
+
+```bash
+# On the host, from this repo:
+./install.sh                 # re-copies the files and rebuilds the image
+                             # (its final `login` step can be exited if you're already logged in)
+# Existing project containers still run the old image — recreate them.
+# This drops each container's local session history (credentials are kept),
+# and kills any agent session running inside them, so exit those first.
+docker ps -aq --filter label=ai-agent-vm=1 | xargs -r docker rm -f
+```
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -87,7 +118,7 @@ Multiple panes in the same project directory share one container but each get th
 
 ## Performance
 
-- **Image build**: one-time, ~30 s.
+- **Image build**: one-time, a few minutes (the C/C++/Python toolchain dominates; the image is several hundred MB larger than the bare CLI image).
 - **First `ai-agent-vm` in a new directory**: ~1 s (container create + start).
 - **Every subsequent call**: ~50 ms (`docker exec`).
 - **Idle memory**: a single `sleep infinity` process — a few MB per container.
@@ -155,5 +186,5 @@ docker rmi ai-agent-vm:latest
 
 ## Notes
 
-- No git inside the container by design. Run git on the host — the working directory is mounted read/write at `/workspace`.
+- git is installed for local use, but no SSH keys or credentials are ever available inside the container. Push/pull from the host — the working directory is mounted read/write at `/workspace`.
 - `ai-agent-vm login` forwards port 54545 from `127.0.0.1` to the container for the OAuth redirect. Override the port with `AI_AGENT_VM_OAUTH_PORT` if needed.

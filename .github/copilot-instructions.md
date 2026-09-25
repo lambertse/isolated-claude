@@ -10,7 +10,9 @@ container while sharing login credentials across projects via a named Docker vol
   All subcommands (`run` (default), `login`, `shell`, `stop`, `rm`, `ps`, `rebuild`,
   `help`) are implemented as `cmd_<name>` bash functions dispatched from `main()`.
 - `Dockerfile` — builds the `ai-agent-vm:latest` image (Node LTS + the agent CLI
-  npm package, no git by design, runs as non-root `node` user).
+  npm package + a C/C++ (GCC, CMake, GoogleTest, Google Benchmark, gdb, valgrind),
+  git and basic Python toolchain, runs as non-root `node` user). The package list
+  is mirrored in `README.md`'s "What's in the image" table — keep them in sync.
 - `entrypoint.sh` — runs once per container via `tini` on `docker run` (NOT on
   `docker exec`, since exec skips ENTRYPOINT) to wire up persisted config/history.
 - `install.sh` — copies the three files above into `~/.local/share/ai-agent-vm/`,
@@ -76,8 +78,8 @@ together — the split is not obvious from any single file:
   `main()`'s `case` statement) — don't add new subcommands without checking this
   doesn't collide with real CLI flags.
 - Only the current working directory is bind-mounted (`-v "$(pwd -P):/workspace"`);
-  no other host paths are exposed, and git is intentionally not installed in the
-  image (run git on the host).
+  no other host paths are exposed. git is installed for local operations, but SSH
+  keys / git credentials are never mounted (don't add them — push/pull from the host).
 
 ## Conventions
 
