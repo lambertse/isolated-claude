@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ai-agent-vm — launch AI Agent CLI inside a per-project Docker container.
+# ai-agent-vm - launch AI Agent CLI inside a per-project Docker container.
 #
 # Design:
 #   - One container per project directory (name derived from path hash).
@@ -26,12 +26,12 @@ AGENT_BIN="${AI_AGENT_VM_BIN:-claude}"
 
 # npm package that provides the CLI. Used by `upgrade` to reinstall inside a
 # running container. NOTE: the Dockerfile hardcodes this same name at build
-# time, so this var is not a single source of truth — keep the two in sync.
+# time, so this var is not a single source of truth - keep the two in sync.
 AGENT_PKG="${AI_AGENT_VM_PKG:-@anthropic-ai/claude-code}"
 
 IMAGE_NAME="${AI_AGENT_VM_IMAGE:-ai-agent-vm:latest}"
 AUTH_VOLUME="${AI_AGENT_VM_AUTH_VOLUME:-ai-agent-vm-auth}"
-# Second volume for ~/.claude.json (the config file, NOT the directory) —
+# Second volume for ~/.claude.json (the config file, NOT the directory) -
 # a path hardcoded by the AI Agent CLI itself, not something we choose.
 # AI Agent CLI stores account/onboarding state there; without it, you're prompted to log in
 # again even with a valid token in .credentials.json.
@@ -77,7 +77,7 @@ ensure_auth_volume() {
     just_created=1
   fi
 
-  # Seed from host ~/.claude on first creation only — lets you skip OAuth if
+  # Seed from host ~/.claude on first creation only - lets you skip OAuth if
   # already logged in on host. Never re-seed an existing volume (would clobber
   # container-only state like session isolation symlinks).
   if [[ "$just_created" -eq 1 ]] && [[ -d "$HOME/.claude" ]]; then
@@ -93,7 +93,7 @@ ensure_auth_volume() {
   # Always (re)assert ownership, not just on first creation. A fresh named
   # volume defaults to root:root, and a volume from a prior buggy run (or
   # created/touched by any other root-run container) can drift back to
-  # root-owned — entrypoint.sh runs as uid 1000 (`node`) and needs write
+  # root-owned - entrypoint.sh runs as uid 1000 (`node`) and needs write
   # access every time. This is idempotent and cheap, so just always run it.
   docker run --rm \
     --user 0:0 \
@@ -270,7 +270,7 @@ cmd_upgrade() {
 
   # The CLI is installed globally as root in the image, so its own auto-updater
   # (which runs as the `node` user) can't write to /usr/local/lib/node_modules
-  # and silently no-ops — that's why the version drifts. We reinstall as root.
+  # and silently no-ops - that's why the version drifts. We reinstall as root.
   echo "ai-agent-vm: current version in $name:" >&2
   docker exec -u root "$name" "$AGENT_BIN" --version >&2 || true
 
@@ -282,7 +282,7 @@ cmd_upgrade() {
 
   cat >&2 <<EOF
 
-ai-agent-vm: NOTE — this upgraded ONLY this project's container ($name).
+ai-agent-vm: NOTE - this upgraded ONLY this project's container ($name).
   * It survives 'stop'/'start' but is lost on 'ai-agent-vm rm' and is NOT
     present in any freshly created container.
   * Other project containers still run the image's baked-in version.
@@ -298,14 +298,14 @@ cmd_commit() {
   [[ -n "$(container_state "$name")" ]] || die "no container for this directory"
   echo "ai-agent-vm: committing $name -> image '$IMAGE_NAME' ..." >&2
   # docker commit excludes the bind-mounted /workspace and the named volumes,
-  # so it captures packages you apt/npm-installed in the container layer — the
+  # so it captures packages you apt/npm-installed in the container layer - the
   # answer to "update the image without a from-scratch rebuild".
   docker commit "$name" "$IMAGE_NAME" >/dev/null
   cat >&2 <<EOF
 ai-agent-vm: image '$IMAGE_NAME' now reflects the current state of $name.
   Future containers will include deps you installed inside it.
   CAVEATS:
-  * The image now DIVERGES from the Dockerfile — a later 'ai-agent-vm rebuild'
+  * The image now DIVERGES from the Dockerfile - a later 'ai-agent-vm rebuild'
     rebuilds from source and drops these deps again. The durable fix is to add
     them to the Dockerfile so they survive rebuilds.
   * The commit also bakes in this container's local session state
@@ -315,7 +315,7 @@ EOF
 
 cmd_help() {
   cat <<EOF
-ai-agent-vm — AI Agent CLI in a per-project Docker container
+ai-agent-vm - AI Agent CLI in a per-project Docker container
 
 Usage:
   ai-agent-vm [agent-args...]    Start/reuse this dir's container, run AI Agent CLI
@@ -351,7 +351,7 @@ main() {
       "cmd_$sub" "$@"
       ;;
     upgrade|update)
-      # 'update' is an alias — without it, the bare word falls through to the
+      # 'update' is an alias - without it, the bare word falls through to the
       # agent binary and runs the CLI's own `claude update`, which can't write
       # the root-owned global install and fails. Route both to our root-based path.
       shift

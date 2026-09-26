@@ -1,13 +1,13 @@
 # isolated-claude
 
-Run an AI coding agent CLI inside a per-project Docker container on macOS (Apple Silicon). Your host filesystem stays isolated — only the current working directory is mounted into the container.
+Run an AI coding agent CLI inside a per-project Docker container on macOS (Apple Silicon). Your host filesystem stays isolated - only the current working directory is mounted into the container.
 
 ## Why
 
-- **No credential sprawl** — SSH keys, `~/.aws`, dotfiles, and other host secrets are never visible inside the container.
-- **One container per project** — named by hashing the project path. First run creates it; subsequent runs `docker exec` in (~50 ms).
-- **Log in once** — a Docker named volume (`ai-agent-vm-auth`) holds credentials and global config. Every project container shares it automatically.
-- **tmux-friendly** — each `ai-agent-vm` call spawns a fresh agent process, so different panes in the same project get independent sessions sharing one container.
+- **No credential sprawl** - SSH keys, `~/.aws`, dotfiles, and other host secrets are never visible inside the container.
+- **One container per project** - named by hashing the project path. First run creates it; subsequent runs `docker exec` in (~50 ms).
+- **Log in once** - a Docker named volume (`ai-agent-vm-auth`) holds credentials and global config. Every project container shares it automatically.
+- **tmux-friendly** - each `ai-agent-vm` call spawns a fresh agent process, so different panes in the same project get independent sessions sharing one container.
 
 ## Prerequisites
 
@@ -38,7 +38,7 @@ source ~/.zshrc
 ai-agent-vm login
 ```
 
-This opens a browser for the Anthropic OAuth flow. Your token is saved to the `ai-agent-vm-auth` Docker volume — you never need to log in again, even across projects.
+This opens a browser for the Anthropic OAuth flow. Your token is saved to the `ai-agent-vm-auth` Docker volume - you never need to log in again, even across projects.
 
 ### Uninstall
 
@@ -102,7 +102,7 @@ Notes:
 # On the host, from this repo:
 ./install.sh                 # re-copies the files and rebuilds the image
                              # (its final `login` step can be exited if you're already logged in)
-# Existing project containers still run the old image — recreate them.
+# Existing project containers still run the old image - recreate them.
 # This drops each container's local session history (credentials are kept),
 # and kills any agent session running inside them, so exit those first.
 docker ps -aq --filter label=ai-agent-vm=1 | xargs -r docker rm -f
@@ -121,18 +121,18 @@ docker ps -aq --filter label=ai-agent-vm=1 | xargs -r docker rm -f
 - **Image build**: one-time, a few minutes (the C/C++/Python toolchain dominates; the image is several hundred MB larger than the bare CLI image).
 - **First `ai-agent-vm` in a new directory**: ~1 s (container create + start).
 - **Every subsequent call**: ~50 ms (`docker exec`).
-- **Idle memory**: a single `sleep infinity` process — a few MB per container.
+- **Idle memory**: a single `sleep infinity` process - a few MB per container.
 
 ## How auth sharing works
 
 The agent CLI stores state in two places (paths hardcoded by the CLI itself, not something this project chooses):
 
-1. `~/.claude/` — credentials, settings, plugins, etc.
-2. `~/.claude.json` — account/onboarding state (a file at `$HOME`, not inside `.claude/`)
+1. `~/.claude/` - credentials, settings, plugins, etc.
+2. `~/.claude.json` - account/onboarding state (a file at `$HOME`, not inside `.claude/`)
 
 The `ai-agent-vm-auth` volume is mounted at `/home/node/.claude` in every container. `entrypoint.sh` symlinks `~/.claude.json` into that volume so account state persists alongside credentials. Credentials and global config are therefore shared across all projects.
 
-**Isolated per container** (container-local, not in the shared volume): `projects/`, `sessions/`, `history.jsonl`, and other ephemeral state. Removing a project container with `ai-agent-vm rm` only deletes that project's history — credentials and global config are untouched.
+**Isolated per container** (container-local, not in the shared volume): `projects/`, `sessions/`, `history.jsonl`, and other ephemeral state. Removing a project container with `ai-agent-vm rm` only deletes that project's history - credentials and global config are untouched.
 
 ## Troubleshooting
 
@@ -155,7 +155,7 @@ env | grep -iE 'CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN'
 
 Unset any matches in your shell rc.
 
-> **macOS note:** The host agent CLI stores its OAuth token in the Keychain, not in `~/.claude/.credentials.json`. Seeding the volume from host `~/.claude` does **not** copy the token — run `ai-agent-vm login` once instead.
+> **macOS note:** The host agent CLI stores its OAuth token in the Keychain, not in `~/.claude/.credentials.json`. Seeding the volume from host `~/.claude` does **not** copy the token - run `ai-agent-vm login` once instead.
 
 **Inspect the auth volume**
 
@@ -186,5 +186,5 @@ docker rmi ai-agent-vm:latest
 
 ## Notes
 
-- git is installed for local use, but no SSH keys or credentials are ever available inside the container. Push/pull from the host — the working directory is mounted read/write at `/workspace`.
+- git is installed for local use, but no SSH keys or credentials are ever available inside the container. Push/pull from the host - the working directory is mounted read/write at `/workspace`.
 - `ai-agent-vm login` forwards port 54545 from `127.0.0.1` to the container for the OAuth redirect. Override the port with `AI_AGENT_VM_OAUTH_PORT` if needed.

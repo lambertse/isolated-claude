@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs on every container start AND via `docker exec` (no — exec skips ENTRYPOINT).
+# Runs on every container start AND via `docker exec` (no - exec skips ENTRYPOINT).
 # That's fine: we only need this to run once at container creation time, which
 # matches ENTRYPOINT behavior. For exec'd sessions, the symlink is already in place.
 set -e
@@ -45,7 +45,7 @@ if [ -d "$VOLUME_ROOT" ]; then
   #
   # Container-local storage lives at ~/.ai-agent-local/ (inside the container's
   # own filesystem, NOT the volume). It survives for the container's lifetime
-  # — which matches one-container-per-project semantics.
+  # - which matches one-container-per-project semantics.
   LOCAL_ROOT="$HOME/.ai-agent-local"
   mkdir -p "$LOCAL_ROOT"
 
@@ -56,7 +56,7 @@ if [ -d "$VOLUME_ROOT" ]; then
     mkdir -p "$local_dir"
 
     # If the volume has existing data for this dir (from before isolation was added),
-    # leave it in the volume but don't use it — the symlink points to the local copy.
+    # leave it in the volume but don't use it - the symlink points to the local copy.
     # Remove any real dir or stale symlink at the volume path, replace with symlink.
     if [ -L "$volume_dir" ]; then
       rm -f "$volume_dir"
@@ -69,7 +69,7 @@ if [ -d "$VOLUME_ROOT" ]; then
     ln -s "$local_dir" "$volume_dir"
   done
 
-  # history.jsonl — same treatment but it's a file, not a dir.
+  # history.jsonl - same treatment but it's a file, not a dir.
   local_history="$LOCAL_ROOT/history.jsonl"
   volume_history="$VOLUME_ROOT/history.jsonl"
   if [ ! -e "$local_history" ]; then

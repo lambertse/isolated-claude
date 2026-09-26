@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall.sh — remove everything install.sh set up (launcher symlink, installed
+# uninstall.sh - remove everything install.sh set up (launcher symlink, installed
 # files) plus all Docker state (containers, image, volumes) for this tool, so a
 # subsequent ./install.sh starts completely fresh with no cached image layers,
 # containers, or credentials left behind.
@@ -59,7 +59,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   docker volume rm "$AUTH_VOLUME" >/dev/null 2>&1 || true
   docker volume rm "$CONFIG_VOLUME" >/dev/null 2>&1 || true
 else
-  echo "uninstall: docker not found or daemon not reachable — skipping container/image/volume cleanup" >&2
+  echo "uninstall: docker not found or daemon not reachable - skipping container/image/volume cleanup" >&2
 fi
 
 echo "uninstall: removing launcher symlink ($LAUNCHER_LINK) ..."
